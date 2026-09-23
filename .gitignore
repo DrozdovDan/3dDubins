@@ -1,0 +1,13 @@
+# Local environment and Python caches
+.venv/
+__pycache__/
+*.py[cod]
+.idea/
+
+# Generated data
+outputs/
+.viz_build/
+.mplconfig/
+
+# Keep local paper copies, but do not publish them without rights review.
+papers/*.pdf

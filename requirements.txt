@@ -1,0 +1,4 @@
+# Only needed for --plot and --save-visuals.
+# The planner, default examples, and tests use the standard library.
+matplotlib
+pillow
