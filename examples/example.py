@@ -15,7 +15,7 @@ from dubins_airplane import Pose, plan_dubins_airplane
 def main():
     # East, north, altitude (metres), heading (radians from east).
     depot = Pose(0.0, 0.0, 120.0, radians(0))
-    # This altitude deliberately requires a helical turn on each leg.
+    # Both altitude changes exercise Owen's high case: turns plus a fitted radius.
     transfer_point = Pose(500.0, 250.0, 500.0, radians(90))
     destination = Pose(850.0, 600.0, 100.0, radians(180))
 
@@ -37,7 +37,8 @@ def main():
         for number, leg in enumerate(legs, 1):
             for pose in leg.sample(max_horizontal_step=5.0):
                 writer.writerow([number, pose.x, pose.y, pose.z, degrees(pose.yaw)])
-            print(f"Leg {number}: {leg.word}, {leg.extra_turns} full helix turns, "
+            print(f"Leg {number}: {leg.altitude_case}, {leg.word}, "
+                  f"R={leg.radius:.1f} m, {leg.extra_turns} full helix turns, "
                   f"{leg.length:.1f} m, flight-path angle "
                   f"{degrees(leg.flight_path_angle):.1f} deg")
     print(f"Wrote {output}")

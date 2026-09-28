@@ -4,13 +4,13 @@ The pictures show the same route in three ways. The **3D view** shows the actual
 
 The green circle is the first waypoint, a red square is the last, and white diamonds are intermediate waypoints. Numbered labels tell you the requested location and altitude. Each colored curve is one route leg. The small arrows point in the travel direction, including the requested heading at the end of a leg. GIFs move in equal **distance** increments, not equal time increments: this planner does not model speed.
 
-Read each three-letter path code from start to finish: `L` is a left turn, `R` a right turn, and `S` a straight segment in the horizontal plane. For example, `RSR` means right turn → straight → right turn. The legend also gives the number of complete helical turns added for altitude and the total **3D** length of that leg. A climbing helix is placed before the planar path; a descending helix is placed after it.
+Read each path code from start to finish: `L` is a left turn, `R` a right turn, and `S` a straight segment in the horizontal plane. For example, `RSR` means right turn → straight → right turn. Low/high cases have three letters; the medium case has four, because it adds an intermediate arc. The legend gives the altitude case, actual turn radius, number of added complete turns, and total **3D** length. High-case turns extend the first helix for climb or the last helix for descent. Height changes uniformly with path distance within every leg, including the straight section.
 
 For nearly level routes, the 3D panel expands the vertical display scale to keep it legible. Its altitude labels and the altitude profile retain the real metre values.
 
 ## 1. Two-leg route: depot → high transfer point → destination
 
-The aircraft begins at the depot at 120 m heading east, climbs to the transfer point at 500 m heading north, then descends to the destination at 100 m heading west. The maximum climb/descent angle is 15° and the minimum horizontal turn radius is 60 m. Each leg adds one full helical turn to gain enough horizontal distance for its altitude change.
+The aircraft begins at the depot at 120 m heading east, climbs to the transfer point at 500 m heading north, then descends to the destination at 100 m heading west. The maximum climb/descent angle is 15° and the minimum horizontal turn radius is 60 m. Both legs are high-altitude cases: each adds two complete turns and fits a radius slightly above 60 m to achieve exactly the required height change at 15°.
 
 ![Animation of two-leg climb and descent](../visuals/two_leg_route.gif)
 
@@ -24,11 +24,11 @@ Both alternatives leave the same depot and reach `(450, 250, 120)`. One must arr
 
 [Open a still image](../visuals/arrival_headings.png) · Code: [`example_arrival_heading.py`](../examples/example_arrival_heading.py)
 
-## 3. Climb above one ground point
+## 3. Owen's three altitude cases
 
-The target has the **same** `(x, y)` and heading as the start, but is 200 m higher. A forward-flying aircraft cannot go straight up, so the route circles three times while climbing. The altitude profile is a straight line because this example uses a constant flight-path angle; it is not a vertical climb.
+All three alternatives start at `(0, 0, 100)` heading east and reach `(500, 200)` heading north, but their target heights differ. The minimum radius is 50 m and the limiting angle is 12°. **Low** uses the ordinary CSC with a shallower climb. **Medium** adds a fitted partial maneuver without a complete extra loop. **High** adds two complete loops and increases the radius. Medium/high use the limiting climb angle; their altitude-profile slopes are identical. The GIF visits the alternatives one after another; they are not consecutive legs of one mission.
 
-![Animation of three-turn climbing helix](../visuals/climb_helix.gif)
+![Animation comparing low, medium, and high altitude gains](../visuals/climb_helix.gif)
 
 [Open a still image](../visuals/climb_helix.png) · Code: [`example_climb_limit.py`](../examples/example_climb_limit.py)
 

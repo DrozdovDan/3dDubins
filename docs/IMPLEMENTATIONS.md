@@ -4,7 +4,7 @@ Search date: 2026-09-21. Repositories are grouped by what they actually implemen
 
 ## Python implementation in this folder
 
-Start with [`core.py`](../dubins_airplane/core.py) and [`example.py`](../examples/example.py). The planner needs only Python's standard library and solves a fixed-wing route leg between `(x, y, z, yaw)` states with horizontal turn-radius and climb-angle limits. [`KNOWLEDGE_GUIDE.md`](KNOWLEDGE_GUIDE.md) explains how it relates to the papers, including its limits and alternatives.
+Start with [`core.py`](../dubins_airplane/core.py) and [`example.py`](../examples/example.py). The standard-library planner implements **Owen–Beard–McLain, Section 4** between `(x, y, z, yaw)` states: low, medium (fitted extra arc), and high (complete turns and fitted radius). [`KNOWLEDGE_GUIDE.md`](KNOWLEDGE_GUIDE.md) maps the code to the equations and explains its limits and differences from the NTNU implementation.
 
 ## Direct 3D path solvers
 

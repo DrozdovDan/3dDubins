@@ -105,6 +105,8 @@ def visualize_routes(
         spatial.view_init(elev=24, azim=-62)
         spatial.set_box_aspect((xlim[1] - xlim[0], ylim[1] - ylim[0],
                                 max(zlim[1] - zlim[0], 0.25 * horizontal_span)))
+        spatial.xaxis.set_major_locator(MaxNLocator(nbins=4))
+        spatial.yaxis.set_major_locator(MaxNLocator(nbins=4))
         if flat_altitude:
             spatial.set_zticks([zs[0]])
         else:
@@ -131,10 +133,13 @@ def visualize_routes(
             spatial.plot(x, y, z, color=color, lw=2.2, alpha=opacity)
             map_view.plot(x, y, color=color, lw=2.2, alpha=opacity,
                           label=(f"{leg.label}: {leg.path.word}, "
-                                 f"{leg.path.extra_turns} helix, "
+                                 f"{leg.path.altitude_case}, R={leg.path.radius:.0f} m, "
+                                 f"{leg.path.extra_turns} turns, "
                                  f"{leg.path.length:.0f} m"))
             altitude.plot(d, z, color=color, lw=2.2, alpha=opacity,
-                          ls="--" if compare_alternatives and index % 2 else "-")
+                          # Medium/high share gamma_max: leave gaps in the
+                          # later curve so the earlier curve remains visible.
+                          ls="--" if compare_alternatives and index > 1 else "-")
 
             if len(poses) > 3:
                 start, end = poses[len(poses) // 2], poses[min(len(poses) - 1,
@@ -178,7 +183,7 @@ def visualize_routes(
             near_right = point.x > xlim[0] + 0.8 * (xlim[1] - xlim[0])
             near_top = point.y > ylim[0] + 0.8 * (ylim[1] - ylim[0])
             label_x = -6 if near_right else 6
-            label_y = -30 if near_top else 8 + 26 * occurrence
+            label_y = -30 - 26 * occurrence if near_top else 8 + 26 * occurrence
             map_view.annotate(f"{index + 1}. {waypoint.label}\n{point.z:.0f} m",
                               (point.x, point.y), xytext=(label_x, label_y),
                               textcoords="offset points", fontsize=8,

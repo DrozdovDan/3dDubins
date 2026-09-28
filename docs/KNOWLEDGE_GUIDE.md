@@ -7,7 +7,7 @@ The phrase “3D Dubins” covers several different aircraft models. Before choo
 | Layer | Question | Papers and code in this collection |
 |---|---|---|
 | Mission routing | Which depot, delivery point, or transfer point comes next? | [2017 data collection/orienteering](https://comrob.fel.cvut.cz/papers/ecmr17dop3d.pdf); [2023 visual inspection tours](https://arxiv.org/abs/2301.05309) shows another multi-target formulation. |
-| Local steering | What flyable curve connects two specified position/heading states? | [2007 Dubins airplane](https://msl.cs.uiuc.edu/~lavalle/papers/ChiLav07b.pdf); [Owen–Beard–McLain](https://sector3.imm.uran.ru/magistr/literat/BeardMcLain__.pdf); [2020 bounded-curvature/pitch method](https://comrob.fel.cvut.cz/papers/icra20dubins3d.pdf). The accompanying [`core.py`](../dubins_airplane/core.py) solves a simple version of this layer. |
+| Local steering | What flyable curve connects two specified position/heading states? | [2007 Dubins airplane](https://msl.cs.uiuc.edu/~lavalle/papers/ChiLav07b.pdf); [Owen–Beard–McLain](https://scholarsarchive.byu.edu/facpub/1900/); [2020 bounded-curvature/pitch method](https://comrob.fel.cvut.cz/papers/icra20dubins3d.pdf). The accompanying [`core.py`](../dubins_airplane/core.py) implements Owen's Section 4 construction. |
 | Global path and safety | Can the curve avoid terrain and no-fly areas? | [2024 steep-terrain navigation](https://arxiv.org/abs/2401.04831); [Hybrid A* example](https://github.com/zgoddard3/hybrid-astar); [OMPL 3D Dubins spaces](https://ompl.kavrakilab.org/spaces.html). |
 | Tracking and operations | Can the real aircraft follow the curve in wind and with its actual performance? | [Owen–Beard–McLain guidance](https://sector3.imm.uran.ru/magistr/literat/BeardMcLain__.pdf); [2024 steady-wind paths](https://arxiv.org/abs/2412.04797); [2026 smoothing](https://arxiv.org/abs/2603.21713). |
 
@@ -28,12 +28,19 @@ These methods are not interchangeable: a heading-only endpoint does not prescrib
 
 Input is a pair of `Pose(x, y, z, yaw)` states, a minimum horizontal turn radius `R`, and a maximum absolute flight-path angle `gamma_max`. All positions and `R` are in metres; angles are radians. `x` points east, `y` north, and `z` upward in the example.
 
-1. Enumerate the six planar Dubins curve families: `LSL`, `RSR`, `LSR`, `RSL`, `RLR`, `LRL`. Each has left/right circular turns of radius `R`, straight segments, or both.
-2. For each candidate, calculate its horizontal length `L_xy`. A constant climb/descent angle can cover the altitude change `delta_z` only if `L_xy * tan(gamma_max) >= abs(delta_z)`.
-3. If the horizontal path is too short, add the smallest number of **complete circular helix turns** at the start for a climb or at the end for a descent. Each turn adds `2*pi*R` of horizontal travel and returns to the same horizontal pose.
-4. Select the shortest resulting candidate, set `gamma = atan2(delta_z, L_xy_total)`, and sample the exact circular/straight segment geometry. The 3D length is `sqrt(L_xy_total**2 + delta_z**2)`.
+This is an independent implementation of [Owen–Beard–McLain, Section 4](https://www2.et.byu.edu/~beard/papers/preprints/BeardMcLain__.pdf). Unlike the previous six-word/full-turn approximation, it uses the chapter's four **CSC** families: `RSR`, `RSL`, `LSR`, `LSL`. First choose the shortest at `R_min` and call its horizontal length `L0`. The required horizontal distance at the limiting angle is `D = abs(delta_z) / tan(gamma_max)`.
 
-The extra turns make the construction feasible and easy to inspect. For medium and high altitude changes, [Owen–Beard–McLain](https://sector3.imm.uran.ru/magistr/literat/BeardMcLain__.pdf) also adjust turn radii or add intermediate arcs to shorten the result. This small Python implementation does not perform those optimizations, so its returned 3D path should not be described as globally shortest.
+| Case | Construction in the code | Chapter |
+|---|---|---|
+| `low`: `D <= L0` | Keep `R_min`; set `gamma = atan2(delta_z, L0)` | 4.2.1 |
+| `medium`: `L0 < D < L0 + 2*pi*R_min` | Advance on the start circle for climb (backwards on the end circle for descent), re-plan a CSC to/from this intermediate pose, and bisect `phi` until `phi*R_min + L_car(intermediate) = D` | 4.2.3 |
+| `high`: `D >= L0 + 2*pi*R_min` | Set `k = floor((D-L0)/(2*pi*R_min))`; bisect `R* >= R_min` until `L_car(R*) + 2*pi*k*R* = D` | 4.2.2, Equation (20) |
+
+The equality at the medium/high boundary is represented as one full turn at `R_min`; the two constructions have the same limiting length. Medium/high fly at `+/-gamma_max` within numerical tolerance. Complete high-case turns are folded into the start helix for climb and the end helix for descent. Height changes linearly with distance along the horizontal projection, including all arcs and the straight. The 3D length is `hypot(L_xy, delta_z)`.
+
+`path.altitude_case` identifies the case; `base_word` is the CSC chosen at `R_min`; `word` describes the fitted construction (three letters for low/high, four for medium). `path.radius` is **R***, not necessarily the input minimum; `minimum_radius` keeps the input value. `extra_turns` counts added complete turns in the high case. `extension_angle` is the displacement parameter `phi` used in the medium solve, not necessarily the sweep of the intermediate opposite-turn arc. Equation (19) is available as `minimum_turn_radius(airspeed, max_bank_angle, gravity=9.81)`.
+
+Numerical detail: `L_car` is re-evaluated as the shortest feasible CSC whenever the trial radius or intermediate pose changes, as defined in the chapter. The [NTNU code](https://github.com/ntnu-arl/DubinsAirplane) freezes some turn families during searches; results can differ where that family switches or its wrapped arc jumps. This implementation rejects discontinuities as false roots and bounds all searches instead of risking an infinite loop. It follows the geometric equations rather than reproducing those numerical quirks.
 
 ### Run it
 
@@ -44,9 +51,9 @@ python -m examples.example
 python -m unittest discover -s tests -v
 ```
 
-`example.py` prints two route-leg summaries and writes `outputs/example_route.csv` with sampled coordinates. Its transfer altitude is set so that each leg needs one visible helical turn. For a 3D plot, run `python -m pip install -r requirements.txt`, then `python -m examples.example --plot`. The planner and CSV example themselves use only the Python standard library.
+`example.py` prints two high-case route-leg summaries and writes `outputs/example_route.csv` with sampled coordinates. For a 3D plot, run `python -m pip install -r requirements.txt`, then `python -m examples.example --plot`. The planner and CSV example themselves use only the Python standard library.
 
-Three further runnable examples isolate common questions: [`example_arrival_heading.py`](../examples/example_arrival_heading.py) compares approach headings at one destination, [`example_climb_limit.py`](../examples/example_climb_limit.py) shows how altitude change adds helix turns, and [`example_delivery_mission.py`](../examples/example_delivery_mission.py) connects several fixed waypoints and exports `outputs/delivery_mission_route.csv`. The delivery script also accepts `--plot`. It does not choose the waypoint order or model a landing or payload handoff.
+Three further runnable examples isolate common questions: [`example_arrival_heading.py`](../examples/example_arrival_heading.py) compares approach headings, [`example_climb_limit.py`](../examples/example_climb_limit.py) compares the three altitude cases, and [`example_delivery_mission.py`](../examples/example_delivery_mission.py) connects fixed waypoints and exports `outputs/delivery_mission_route.csv`. It does not choose waypoint order or model landing or payload handoff.
 
 For labeled top-down, 3D, and altitude views of every example, plus route animations, see [`VISUAL_GUIDE.md`](VISUAL_GUIDE.md). Every example accepts `--plot` or `--save-visuals`.
 
@@ -61,16 +68,18 @@ customer = Pose(500, 250, 250, radians(90))
 path = plan_dubins_airplane(depot, customer,
                             radius=60,
                             max_flight_path_angle=radians(15))
-print(path.word, path.extra_turns, path.length)
+print(path.altitude_case, path.word, path.radius, path.extra_turns, path.length)
 points = path.sample(max_horizontal_step=5)
 print(points[-1])  # customer's x, y, z, yaw (modulo 2*pi)
 ```
 
 ### Guarantees and limits of the example
 
-The constructed path reaches the requested position and heading (within floating point error), travels forward, uses horizontal turns of radius at least `R`, and stays within `abs(gamma_max)`. A whole helix can be visible before a climb or after a descent. The tests exercise level flight, climb, descent, coincident horizontal poses, invalid inputs, and hundreds of randomized endpoints.
+The constructed path reaches the requested position and heading (within floating point error), travels forward, uses horizontal turns of radius at least `R_min`, and stays within `abs(gamma_max)` to numerical tolerance. Tests cover the three altitude cases, both directions of altitude change, case boundaries, join tangents, all four CSC base families, and 200 randomized separated endpoints. Sixteen offline NTNU example values check length and radius within that reference's numerical accuracy, without downloading or executing third-party code during tests.
 
-It assumes no wind and a constant flight-path angle over each leg. It does not constrain endpoint pitch, pitch rate, bank transients, airspeed, vertical speed, fuel, battery, or payload. It does not check collisions or airspace. Real operations need a terrain/no-fly-zone planner, weather adjustment, vehicle-specific performance limits, and a path-following controller before flight.
+The chapter's CSC construction does not include `RLR`/`LRL`, so it is not a general six-family Dubins solver. The NTNU examples conservatively require at least `6*R_min` horizontal separation. Some closer configurations still work, but an unsolvable length equation raises `ValueError`. A zero-length identical pose is supported; an arbitrary small climb above the same horizontal pose is not silently replaced with a shallow full circle. No globally shortest path claim is made over all possible 3D trajectories.
+
+It assumes no wind and a constant flight-path angle over each leg. Endpoint pitch, pitch rate, bank transients, speed evolution, fuel, battery, and payload are not modeled. Section 3's vector-field guidance and Section 4.3's flight-state path manager are not implemented: `pose_at`/`sample` evaluate the geometric reference curve. Obstacles and airspace require a separate planner.
 
 ## 4. What each paper contributes
 

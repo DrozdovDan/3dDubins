@@ -39,8 +39,9 @@ def main():
             for pose in path.sample(max_horizontal_step=10):
                 writer.writerow([number, start_name, goal_name, pose.x, pose.y,
                                  pose.z, degrees(pose.yaw)])
-            print(f"{number}. {start_name} -> {goal_name}: {path.word}, "
-                  f"{path.extra_turns} helix turns, {path.length:.1f} m")
+            print(f"{number}. {start_name} -> {goal_name}: {path.altitude_case}, "
+                  f"{path.word}, R={path.radius:.1f} m, "
+                  f"{path.extra_turns} full helix turns, {path.length:.1f} m")
 
     print(f"Total flight-path distance: {sum(path.length for _, _, path in legs):.1f} m")
     print(f"Wrote {output}")
