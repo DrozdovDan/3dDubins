@@ -6,6 +6,8 @@ Search date: 2026-09-21. Repositories are grouped by what they actually implemen
 
 Start with [`core.py`](../dubins_airplane/core.py) and [`example.py`](../examples/example.py). The standard-library planner implements **Owen–Beard–McLain, Section 4** between `(x, y, z, yaw)` states: low, medium (fitted extra arc), and high (complete turns and fitted radius). [`KNOWLEDGE_GUIDE.md`](KNOWLEDGE_GUIDE.md) maps the code to the equations and explains its limits and differences from the NTNU implementation.
 
+[`rrt_star.py`](../dubins_airplane/rrt_star.py), [`terrain.py`](../dubins_airplane/terrain.py) and [`example_obstacles.py`](../examples/example_obstacles.py) add an independent **Lim et al. (2024), Sections III–V** planning layer: terrain offsets, validated periodic loiters, and directed Dubins RRT* with conservative collision checks. The authors' complete ROS/C++ system is [ethz-asl/terrain-navigation](https://github.com/ethz-asl/terrain-navigation).
+
 ## Direct 3D path solvers
 
 | Repository | Language | What is implemented |

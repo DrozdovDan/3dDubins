@@ -40,6 +40,38 @@ The waypoints are fixed in advance: Depot → Customer A → Customer B → Retu
 
 [Open a still image](../visuals/delivery_mission.png) · Code: [`example_delivery_mission.py`](../examples/example_delivery_mission.py)
 
+## 5. Terrain, obstacle and safe arrival circle
+
+[`example_obstacles.py`](../examples/example_obstacles.py) has no prescribed intermediate waypoints. It uses a different, simpler layout with Russian labels. Read it in this order:
+
+1. **Top-left map:** green point = departure; blue square = arrival. The **one blue line** is the entire discovered route. Teal dashed circles are safe loiters, not extra route legs. Small blue numbers mark the joins between RRT* legs.
+2. **Top-right 3D view:** the same route and heights, with transparent terrain/boxes so the line remains visible. Height may be visually expanded; use the labelled metre values, not the display aspect ratio.
+3. **Bottom height profile:** distance along the **blue route**, not east coordinate. The route must stay between the two dashed green bounds. Green fill is the permitted corridor; grey-brown ground is the terrain beneath this route. Its raster steps are expected. This band uses conservative Euclidean offsets, not simply terrain height plus a constant vertical clearance.
+
+Orange hatched footprints are forbidden **volumes**, labeled `П1`, `П2`, etc., with their altitude ranges. The direct Dubins comparison uses exactly the found route's departure and arrival states. It is **red dashed if blocked**, with a cross at a blocked sample, or **grey dashed if free**. The altitude panel shows the corridor of the found route, not of that comparison. The continuous checker decides safety; crosses are only point-sampled visual explanations and do not locate every possible collision.
+
+The GIF's red moving marker is synchronized across map, 3D, and altitude profile; the darker blue trail shows distance already covered. It does **not** show a physical speed or flight time. The aircraft arrives tangent to the goal circle and can continue circling there.
+
+![Dubins RRT* around a forbidden volume over terrain](../visuals/obstacle_route.gif)
+
+[Open a still image](../visuals/obstacle_route.png) · Code: [`example_obstacles.py`](../examples/example_obstacles.py)
+
+## 6–8. Three more terrain-planning scenarios
+
+All use the same script and the same visual conventions. Default seed is 7, turn radius at least 40 m, and climb/descent limit 15°. The maps are synthetic, not real flight areas.
+
+| Scenario | What to look for | Preview |
+| --- | --- | --- |
+| `buildings` | Three forbidden boxes on flat ground. The route goes around them laterally; almost level altitude separates this from a terrain problem. | [PNG](../visuals/obstacle_buildings.png), [GIF](../visuals/obstacle_buildings.gif) |
+| `ridge` | No boxes: the red direct path violates clearance near the high ridge. The blue path goes around its lower flank and stays in the local height corridor. | [PNG](../visuals/obstacle_ridge.png), [GIF](../visuals/obstacle_ridge.gif) |
+| `climb` | Start is about 78 m, goal about 191 m. The permitted corridor rises over the slope. The grey direct connection is **free** and coincides with the blue route; not every scene requires a detour. | [PNG](../visuals/obstacle_climb.png), [GIF](../visuals/obstacle_climb.gif) |
+
+```bash
+python -m examples.example_obstacles --scenario buildings --plot
+python -m examples.example_obstacles --scenario ridge --plot
+python -m examples.example_obstacles --scenario climb --plot
+```
+
 ## Run and regenerate
 
 From the `3dDubins` directory:
@@ -50,8 +82,10 @@ python -m examples.example --plot
 python -m examples.example_climb_limit --plot
 python -m examples.example_arrival_heading --plot
 python -m examples.example_delivery_mission --plot
+python -m examples.example_obstacles --plot
+python -m examples.example_obstacles --scenario all --save-visuals
 ```
 
 Use `--save-visuals` in place of `--plot` to write or update that script's PNG and GIF in `visuals/`. The normal no-flag examples still run without plotting packages. GIF creation uses Matplotlib's Pillow writer; no FFmpeg is needed.
 
-These are geometric illustrations only. They do not check terrain, obstacles, airspace, wind, takeoff/landing, or payload handling. The meaning and limits of the model are in [`KNOWLEDGE_GUIDE.md`](KNOWLEDGE_GUIDE.md).
+Examples 1–4 are obstacle-unaware geometric illustrations. Examples 5–8 check their supplied raster terrain bands and any box obstacles, but do not account for wind, tracking errors, dynamic obstacles, takeoff/landing or payload handling. No real-flight safety guarantee is implied. The meaning and limits of the models are in [`KNOWLEDGE_GUIDE.md`](KNOWLEDGE_GUIDE.md).

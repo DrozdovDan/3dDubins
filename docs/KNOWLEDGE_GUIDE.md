@@ -79,7 +79,39 @@ The constructed path reaches the requested position and heading (within floating
 
 The chapter's CSC construction does not include `RLR`/`LRL`, so it is not a general six-family Dubins solver. The NTNU examples conservatively require at least `6*R_min` horizontal separation. Some closer configurations still work, but an unsolvable length equation raises `ValueError`. A zero-length identical pose is supported; an arbitrary small climb above the same horizontal pose is not silently replaced with a shallow full circle. No globally shortest path claim is made over all possible 3D trajectories.
 
-It assumes no wind and a constant flight-path angle over each leg. Endpoint pitch, pitch rate, bank transients, speed evolution, fuel, battery, and payload are not modeled. Section 3's vector-field guidance and Section 4.3's flight-state path manager are not implemented: `pose_at`/`sample` evaluate the geometric reference curve. Obstacles and airspace require a separate planner.
+It assumes no wind and a constant flight-path angle over each leg. Endpoint pitch, pitch rate, bank transients, speed evolution, fuel, battery, and payload are not modeled. Section 3's vector-field guidance and Section 4.3's flight-state path manager are not implemented: `pose_at`/`sample` evaluate the geometric reference curve. The standalone steering function ignores obstacles; the following global planner adds static map checks.
+
+### 3.1 Terrain and obstacle planning (Lim et al.)
+
+[`terrain.py`](../dubins_airplane/terrain.py) and [`rrt_star.py`](../dubins_airplane/rrt_star.py) independently implement the planning structure in [Lim et al., Safe Low-Altitude Navigation in Steep Terrain (2024)](https://arxiv.org/html/2401.04831v2), Sections III–V. The important addition is a safe **terminal circle**, not just a collision-free arrival point: the aircraft can continue circling instead of needing to stop.
+
+| Paper component | Python component |
+|---|---|
+| Terrain offsets, III-B, Eqs. (4)–(5) | `FlightWorld` precomputes conservative lower/upper Euclidean offset bands from `ElevationMap`. |
+| Disk safety filters, IV-C, Eqs. (7)–(8) | `loiter_band` takes the highest floor and lowest ceiling over a whole disk; unknown cells invalidate it. |
+| Goal altitude, V-A, Eq. (9) | `choose_loiter` chooses the midpoint of the safe altitude interval. |
+| Start/goal sets, V-A | `LoiterCircle.states` discretizes positions and tangent headings; goal accepts both turning directions. |
+| Directed Dubins RRT*, V-B | `plan_safe_rrt_star` selects parents and rewires using forward Dubins lengths, updating all descendant costs. |
+
+Data flow: terrain grid → allowed flight band → validated start/goal circles → RRT* search with collision-checked Dubins edges → sampled route. A box obstacle is an additional explicit forbidden volume, not a substitute for the terrain map.
+
+Run `python -m examples.example_obstacles --plot` from the project root. The synthetic map has 20 m cells, a hill, and an inflated forbidden box. Minimum horizontal turn radius is 40 m; maximum absolute flight-path angle is 15°. With seed 7 and 600 iterations, the example finds about 835 m of connecting path in three legs. RRT* determines the intermediate states; none are hand-picked. Change `--seed` or `--iterations` to experiment. The starting phase may be any sampled phase of the already-safe start circle; the cost excludes waiting or travel on that circle.
+
+The same script also provides `--scenario buildings` (flat ground, several boxes), `--scenario ridge` (terrain-only avoidance), and `--scenario climb` (higher destination, a free direct connection). Use `--scenario all --save-visuals` to regenerate all four PNG/GIF pairs. In the Russian map-first views, one blue line is the found route and the green altitude band belongs to that route; the direct comparison uses the same endpoint states. See the [visual guide](VISUAL_GUIDE.md#5-terrain-obstacle-and-safe-arrival-circle) for the color meanings.
+
+#### Representation and collision checking
+
+`ElevationMap(x_min, y_min, resolution, heights)` uses rows increasing north, columns increasing east, and absolute upward height in metres. Origin and cell resolution are also metres. Pass a rectangular tuple of rows from your own data loader; `from_function` is a helper for synthetic examples. GeoTIFF/geographic coordinate conversion is not implemented. Outside the supplied map is forbidden, and the guarantee assumes there is no unmodeled terrain outside it close enough to change the flight band; supply a sufficiently padded map.
+
+The raster represents constant-height cell patches. A spherical offset takes nearby terrain into account: a cliff in a neighbouring cell can invalidate a point even if its own cell is low. The floor is an upper bound and ceiling a lower bound throughout each cell. This conservatism may erase narrow real corridors; refine the map if necessary. `BoxObstacle` adds a closed axis-aligned forbidden volume; `obstacle_margin` inflates it in three axes. Boxes are checked over the entire loiter disk too, so a clear circle around an obstacle-filled disk is deliberately rejected.
+
+`path_is_free` encloses each subcurve in a box using its horizontal arc length and constant slope. It accepts an interval only when every overlapped cell and obstacle permits the entire enclosure; ambiguous intervals are subdivided and eventually rejected, never accepted by point sampling alone. `collision_step` controls the initial subdivision; the conservative minimum interval is 0.05 m by default. This is a guarantee against the **supplied static cell/box model**, not against map errors or aircraft tracking errors.
+
+#### Differences from the authors' system
+
+This version keeps the exact Owen steering from the previous implementation. The authors instead use a faster suboptimal medium-altitude distance and optimized Dubins-family classification. Here the RRT* tree uses full-state connections, a finite iteration budget and discrete circle phases. Unsupported close-pose CSC equations are rejected. Accordingly, the published general asymptotic properties of RRT* should **not** be claimed as guarantees for this restricted implementation. `NoPathError` means the budget ended without a route; try another seed, more iterations, different circles, or finer cells. `time_limit` is a soft wall-clock limit checked between iterations.
+
+The start and terminal loiters are conservatively validated; a collision-free route ending in a valid periodic circle has a modeled continuation. We do not compute the complete ICS set or certify a real aircraft. There is no ROS, OMPL acceleration, SwissAlti3D/GeoTIFF import, PX4 guidance, polynomial smoothing, wind/dynamic obstacle model, bank/pitch transient model or flight-test reproduction. Use the [authors' ROS/C++ repository](https://github.com/ethz-asl/terrain-navigation) for that system.
 
 ## 4. What each paper contributes
 
