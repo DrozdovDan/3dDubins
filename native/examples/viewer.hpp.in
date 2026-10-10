@@ -1,0 +1,3 @@
+#pragma once
+// Adjacent raw literals avoid individual string-literal size limits on MSVC.
+inline constexpr char viewer_template[] = R"DubinsViewer(@DEMO_HTML@)DubinsViewer";

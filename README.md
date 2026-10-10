@@ -1,12 +1,21 @@
 # 3D Dubins for aerial logistics
 
-A small Python implementation of **Owen, Beard & McLain (2014)** trajectories and **Lim et al. (2024)** terrain-aware planning between safe loiter circles. The planners need no third-party packages; plotting is optional.
+A small **C++17 planner with a Python interface** for **Owen, Beard & McLain (2014)** trajectories and **Lim et al. (2024)** terrain-aware planning between safe loiter circles. A readable Python reference remains available; plotting is optional.
 
 ![Two-leg route animation](visuals/two_leg_route.gif)
 
 ## Run
 
-From this folder:
+From this folder, build the fast backend once (Python 3.10+):
+
+```bash
+# Use an installed GCC, Clang, MSVC Developer shell or Zig compiler.
+# If none is available, install a portable compiler:
+python -m pip install ziglang
+python -m dubins_airplane.build_native
+```
+
+Then run the existing examples:
 
 ```bash
 python -m examples.example
@@ -22,6 +31,37 @@ python -m examples.example --save-visuals
 ```
 
 The examples write CSV routes to `outputs/`. Saved PNGs and GIFs are in `visuals/`.
+
+For interactive **Rerun** visualization (3D, top view, aircraft animation and altitude profile):
+
+```bash
+python -m pip install -r rerun_scripts/requirements.txt
+python -m rerun_scripts.dubins --scenario buildings --backend cpp
+python -m rerun_scripts.dubins --scenario all --backend cpp --save
+python -m rerun outputs/rerun/ridge.rrd
+```
+
+The launcher requires C++ by default: the Python code exports and visualizes results, not the search loop. See [Rerun scenarios and controls](rerun_scripts/README.md#сценарии-dubins-с-c-бэкендом).
+
+Terrain scenarios use **10 × 10 m cells**, preserving the 1180 × 800 m map extent
+(1180 × 1000 m for `ridge`). Rerun colors terrain cells by elevation in both views,
+with a shared numeric legend. A dimension line measures the actual start-to-finish
+distance in plan; route length and the distance between loiter centers are shown separately.
+The yellow aircraft marker has a live altitude/readout above the map.
+
+Two harder scenarios at the same map scale: **slalom** (three alternating barrier gaps)
+and **mountain_pass** (two peaks, two barriers and a climb to a plateau).
+[Slalom GIF](visuals/slalom.gif) · [Mountain-pass GIF](visuals/mountain_pass.gif).
+These are captures of the actual Rerun Viewer, with C++ planning, seed 7 and 600 iterations:
+
+```bash
+python -m rerun_scripts.dubins --scenario slalom --backend cpp --gif
+python -m rerun_scripts.dubins --scenario mountain_pass --backend cpp --gif
+```
+
+After building, the examples and Python API automatically use C++. No compiler or extra runtime package is needed to run the built library. Without a library, they fall back to the standard-library Python reference. Check the active backend with `python -c "from dubins_airplane import backend_name; print(backend_name())"`.
+
+Set `DUBINS_BACKEND=cpp` to require C++ or `DUBINS_BACKEND=python` to force the reference. In PowerShell: `$env:DUBINS_BACKEND='cpp'`; in bash: `export DUBINS_BACKEND=cpp`. Rebuild after changing native sources, using the target platform/architecture. For a **C++-only executable** and CMake instructions, see [native/README.md](native/README.md).
 
 ## Use it in Python
 
@@ -74,11 +114,28 @@ To measure planner speed without plotting, CSV export, or GIF encoding:
 
 ```bash
 python -m examples.benchmark_planner --iterations 600
+# Compare both backends on identical samples, without reducing the budget.
+python -m examples.benchmark_planner --backend both --iterations 600 --repeats 3
+# Check the full-call <100 ms target without shortening the search.
+python -m examples.benchmark_planner --backend cpp --iterations 600 --repeats 50 --max-ms 100
 # Optional: repeat with several seeds for timing variability.
 python -m examples.benchmark_planner --scenario hill_box --iterations 600 --repeats 5
 ```
 
 The benchmark reports time to the first feasible path and total RRT* call time (median and range) for each scenario. It prepares the map before timing and uses consecutive random seeds. These are wall-clock measurements on the current computer, not flight-time estimates or an optimality guarantee.
+
+After the additional native optimizations, the development machine (Windows 11, Python 3.12.13, Zig 0.16.0) completed **all 200 planning calls below 100 ms**: 600 iterations, 50 seeds per scenario, seeds 7–56. Full-call times, including Python validation, sampling and native data transfer, but excluding map construction, visualization and warm-up:
+
+| Scenario | Median | Worst observed | Below 100 ms |
+|---|---:|---:|---:|
+| Hill + box | 30 ms | 35.57 ms | 50/50 |
+| Buildings | 32 ms | 46.88 ms | 50/50 |
+| Ridge | 54 ms | 67.18 ms | 50/50 |
+| Climb | 32 ms | 44.48 ms | 50/50 |
+
+The optimizations use lazy exact parent selection with conservative cost bounds, cached curve prefixes/trigonometry, shared root-bracket endpoint values and reusable sorting buffers. The iteration count, Owen families, bisection tolerances and continuous collision-check subdivision are unchanged. On 120 paired calls (600 iterations, seeds 7–36), the optimized backend returned **bit-identical** paths, cost histories and node/rewire counts compared with the previous C++ binary. Differential tests also cover 2,000 state pairs, terrain offsets and routes independently checked by Python. Across different compilers/math libraries or the Python reference, floating-point ties can still resolve differently.
+
+`--max-ms 100` checks every full call against the strict `<100 ms` threshold and exits with status 1 if any call misses it. It is a benchmark assertion, **not** an early-stop setting. These measurements are not a hard real-time guarantee for arbitrary maps, larger budgets, other machines or operating-system load. `time_limit` remains a soft budget, not a guaranteed 100 ms deadline.
 
 ![Terrain and obstacle avoidance](visuals/obstacle_route.gif)
 
@@ -90,7 +147,7 @@ The default `hill_box` scenario avoids a forbidden volume over a hill. `building
 from math import radians
 from dubins_airplane import ElevationMap, FlightWorld, BoxObstacle, plan_safe_rrt_star
 
-terrain = ElevationMap.from_function(-180, -400, 20, 59, 40, lambda x, y: 0)
+terrain = ElevationMap.from_function(-180, -400, 10, 118, 80, lambda x, y: 0)
 world = FlightWorld(terrain, min_clearance=40, max_clearance=110,
                     obstacles=[BoxObstacle(320, -130, 0, 480, 130, 300)])
 start = world.choose_loiter(0, 0, radius=40)

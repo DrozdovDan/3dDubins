@@ -143,6 +143,13 @@ class FlightWorld:
         self.upper = self._offset(max_clearance, upper_bound=False)
 
     def _offset(self, distance, upper_bound):
+        from .native import get_library, offset
+        lib = get_library()
+        if lib is not None:
+            return offset(lib, self.terrain, distance, upper_bound)
+        return self._offset_python(distance, upper_bound)
+
+    def _offset_python(self, distance, upper_bound):
         # Equation (4) is a spherical dilation. For cells, use the nearest
         # rectangle distance for a conservative floor and the farthest
         # target-to-source distance for a conservative ceiling.
@@ -229,6 +236,15 @@ class FlightWorld:
         return circle
 
     def path_is_free(self, path: DubinsAirplanePath, max_step=10.0, min_step=0.05) -> bool:
+        """Conservatively check the entire continuous curve, not just samples."""
+        from .native import get_library, path_is_free
+        lib = get_library()
+        if (lib is not None and type(self) is FlightWorld
+                and type(path) is DubinsAirplanePath and len(path.segments) <= 4):
+            return path_is_free(lib, self, path, max_step, min_step)
+        return self._path_is_free_python(path, max_step, min_step)
+
+    def _path_is_free_python(self, path: DubinsAirplanePath, max_step=10.0, min_step=0.05) -> bool:
         """Conservative continuous-curve check, NOT just point sampling.
 
         A midpoint +/- half the XY arc length bounds the entire XY subcurve;

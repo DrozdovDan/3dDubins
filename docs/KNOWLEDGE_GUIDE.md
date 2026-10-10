@@ -24,7 +24,9 @@ The geometry of a route leg does not assign deliveries, detect obstacles, or com
 
 These methods are not interchangeable: a heading-only endpoint does not prescribe approach climb angle, and a bound on the horizontal turn radius differs from a bound on full 3D curvature.
 
-## 3. How the included Python planner works
+## 3. How the included planner works
+
+The production backend is now C++17: [`native/core.cpp`](../native/core.cpp) implements Owen steering; [`native/rrt_star.cpp`](../native/rrt_star.cpp) runs the directed tree search; [`native/terrain.cpp`](../native/terrain.cpp) checks continuous curves. The existing Python API and the readable reference implementations remain available. Build and backend selection are described in the [README](../README.md#run). The mathematical model and limitations below are unchanged.
 
 Input is a pair of `Pose(x, y, z, yaw)` states, a minimum horizontal turn radius `R`, and a maximum absolute flight-path angle `gamma_max`. All positions and `R` are in metres; angles are radians. `x` points east, `y` north, and `z` upward in the example.
 
@@ -51,7 +53,7 @@ python -m examples.example
 python -m unittest discover -s tests -v
 ```
 
-`example.py` prints two high-case route-leg summaries and writes `outputs/example_route.csv` with sampled coordinates. For a 3D plot, run `python -m pip install -r requirements.txt`, then `python -m examples.example --plot`. The planner and CSV example themselves use only the Python standard library.
+`example.py` prints two high-case route-leg summaries and writes `outputs/example_route.csv` with sampled coordinates. For a 3D plot, run `python -m pip install -r requirements.txt`, then `python -m examples.example --plot`. The Python fallback and adapter need only the standard library; the compiled backend has no Python-package runtime dependencies.
 
 Three further runnable examples isolate common questions: [`example_arrival_heading.py`](../examples/example_arrival_heading.py) compares approach headings, [`example_climb_limit.py`](../examples/example_climb_limit.py) compares the three altitude cases, and [`example_delivery_mission.py`](../examples/example_delivery_mission.py) connects fixed waypoints and exports `outputs/delivery_mission_route.csv`. It does not choose waypoint order or model landing or payload handoff.
 

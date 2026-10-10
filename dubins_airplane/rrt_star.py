@@ -15,7 +15,7 @@ from random import Random
 from time import monotonic
 from typing import Callable
 
-from .core import DubinsAirplanePath, Pose, plan_dubins_airplane
+from .core import DubinsAirplanePath, Pose, _plan_dubins_airplane_python as plan_dubins_airplane
 from .terrain import FlightWorld, LoiterCircle
 
 
@@ -76,7 +76,23 @@ def _rewire(nodes: list[_Node], index: int, parent: int, edge: DubinsAirplanePat
         stack.extend(nodes[current].children)
 
 
-def plan_safe_rrt_star(
+def _validate_inputs(world, start, goal, radius, max_flight_path_angle, iterations,
+                     circle_samples, goal_bias, neighbor_radius, collision_step, time_limit):
+    if (not all(isfinite(v) for v in (radius, max_flight_path_angle, goal_bias,
+                                    neighbor_radius, collision_step))
+            or radius <= 0 or not 0 < max_flight_path_angle < pi / 2
+            or not 0 <= goal_bias <= 1 or neighbor_radius <= 0 or collision_step <= 0
+            or not isinstance(iterations, int) or iterations <= 0
+            or not isinstance(circle_samples, int) or circle_samples < 4
+            or (time_limit is not None and (not isfinite(time_limit) or time_limit <= 0))):
+        raise ValueError("invalid RRT* limits, sample count or search budget")
+    if start.radius < radius or goal.radius < radius:
+        raise ValueError("loiter radii must be at least the aircraft minimum radius")
+    if not world.validate_loiter(start) or not world.validate_loiter(goal):
+        raise ValueError("both start and goal must be safe loiter disks")
+
+
+def _plan_safe_rrt_star_python(
     world: FlightWorld,
     start: LoiterCircle,
     goal: LoiterCircle,
@@ -105,18 +121,8 @@ def plan_safe_rrt_star(
     on_first_solution is called once, immediately when a feasible route first
     appears (iteration 0 is possible). Its execution time is part of planning.
     """
-    if (not all(isfinite(v) for v in (radius, max_flight_path_angle, goal_bias,
-                                    neighbor_radius, collision_step))
-            or radius <= 0 or not 0 < max_flight_path_angle < pi / 2
-            or not 0 <= goal_bias <= 1 or neighbor_radius <= 0 or collision_step <= 0
-            or not isinstance(iterations, int) or iterations <= 0
-            or not isinstance(circle_samples, int) or circle_samples < 4
-            or (time_limit is not None and (not isfinite(time_limit) or time_limit <= 0))):
-        raise ValueError("invalid RRT* limits, sample count or search budget")
-    if start.radius < radius or goal.radius < radius:
-        raise ValueError("loiter radii must be at least the aircraft minimum radius")
-    if not world.validate_loiter(start) or not world.validate_loiter(goal):
-        raise ValueError("both start and goal must be safe loiter disks")
+    _validate_inputs(world, start, goal, radius, max_flight_path_angle, iterations,
+                     circle_samples, goal_bias, neighbor_radius, collision_step, time_limit)
     nodes = [_Node(pose) for pose in start.states(circle_samples, start_direction)]
     roots = len(nodes)
     goals = goal.states(circle_samples, "CW") + goal.states(circle_samples, "CCW")
@@ -231,3 +237,26 @@ def plan_safe_rrt_star(
     nonzero = tuple(path for path in paths if path.length > 1e-8)
     return PlanningResult(nonzero or tuple(paths[:1]), start, goal, completed,
                           len(nodes), rewires, tuple(history))
+
+
+def plan_safe_rrt_star(
+    world: FlightWorld, start: LoiterCircle, goal: LoiterCircle,
+    radius: float, max_flight_path_angle: float, *,
+    iterations: int = 600, seed: int = 7, circle_samples: int = 8,
+    start_direction: str = "CCW", goal_bias: float = 0.15,
+    neighbor_radius: float = 400.0, collision_step: float = 10.0,
+    time_limit: float | None = None,
+    on_first_solution: Callable[[int], None] | None = None,
+) -> PlanningResult:
+    from .native import get_library, plan_rrt
+    lib = get_library()
+    parameters = dict(iterations=iterations, seed=seed, circle_samples=circle_samples,
+                      start_direction=start_direction, goal_bias=goal_bias,
+                      neighbor_radius=neighbor_radius, collision_step=collision_step,
+                      time_limit=time_limit, on_first_solution=on_first_solution)
+    if lib is None or type(world) is not FlightWorld:
+        return _plan_safe_rrt_star_python(world, start, goal, radius, max_flight_path_angle, **parameters)
+    return plan_rrt(lib, world, start, goal, radius, max_flight_path_angle, **parameters)
+
+
+plan_safe_rrt_star.__doc__ = _plan_safe_rrt_star_python.__doc__

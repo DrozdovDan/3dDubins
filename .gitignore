@@ -8,6 +8,10 @@ __pycache__/
 outputs/
 .viz_build/
 .mplconfig/
+native/build/
+dubins_airplane/_native.dll
+dubins_airplane/_native.so
+dubins_airplane/_native.dylib
 
 # Keep local paper copies, but do not publish them without rights review.
 papers/*.pdf

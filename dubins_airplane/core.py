@@ -268,7 +268,7 @@ def _medium_path(start: Pose, goal: Pose, radius: float, base_word: str,
     return word, lengths, phi
 
 
-def plan_dubins_airplane(
+def _plan_dubins_airplane_python(
     start: Pose,
     goal: Pose,
     radius: float,
@@ -346,3 +346,15 @@ def plan_dubins_airplane(
             or abs(_angle_error(end.yaw, goal.yaw)) > 1e-8):
         raise RuntimeError("internal Dubins calculation did not reach the goal")
     return path
+
+
+def plan_dubins_airplane(start: Pose, goal: Pose, radius: float,
+                        max_flight_path_angle: float) -> DubinsAirplanePath:
+    from .native import get_library, plan
+    lib = get_library()
+    if lib is None:
+        return _plan_dubins_airplane_python(start, goal, radius, max_flight_path_angle)
+    return plan(lib, start, goal, radius, max_flight_path_angle)
+
+
+plan_dubins_airplane.__doc__ = _plan_dubins_airplane_python.__doc__

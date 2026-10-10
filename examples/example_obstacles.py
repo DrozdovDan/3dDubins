@@ -1,4 +1,4 @@
-"""Four readable examples of safe Dubins RRT* planning.
+"""Readable examples of safe Dubins RRT* planning.
 
 python -m examples.example_obstacles --scenario buildings --plot
 python -m examples.example_obstacles --scenario all --save-visuals
@@ -24,6 +24,10 @@ SCENARIOS = {
               "Искусственных препятствий нет: прямой путь нарушает запас над рельефом."),
     "climb": ("Перелёт на возвышенность",
               "Цель выше старта; маршрут набирает высоту внутри разрешённого коридора."),
+    "slalom": ("Доставка через три запретных барьера",
+               "Чередующиеся проходы: север → юг → север; барьеры нельзя перелететь."),
+    "mountain_pass": ("Доставка на плато через горный проход",
+                      "Набор высоты между двумя вершинами и обход двух запретных объёмов."),
 }
 
 
@@ -43,7 +47,7 @@ class Scenario:
 
 def make_world():
     terrain = ElevationMap.from_function(
-        -180, -400, 20, 59, 40,
+        -180, -400, 10, 118, 80,
         lambda x, y: 65 * exp(-((x - 400) / 140)**2 - (y / 190)**2),
     )
     # An explicit forbidden volume cannot be overflown within this height band.
@@ -59,7 +63,7 @@ def make_scenario(name="hill_box"):
     if name == "hill_box":
         world = make_world()
     elif name == "buildings":
-        terrain = ElevationMap.from_function(-180, -400, 20, 59, 40, lambda x, y: 0)
+        terrain = ElevationMap.from_function(-180, -400, 10, 118, 80, lambda x, y: 0)
         world = FlightWorld(terrain, 40, 110, obstacles=(
             BoxObstacle(220, -180, 0, 330, 90, 240),
             BoxObstacle(470, -60, 0, 580, 220, 240),
@@ -67,16 +71,36 @@ def make_scenario(name="hill_box"):
         ), obstacle_margin=5)
     elif name == "ridge":
         terrain = ElevationMap.from_function(
-            -180, -500, 20, 59, 50,
+            -180, -500, 10, 118, 100,
             lambda x, y: 170 * exp(-((x - 400) / 65)**2 - (y / 230)**2),
         )
         world = FlightWorld(terrain, 30, 100)
-    else:  # climb: a broad slope, with safe level loiters at both ends
+    elif name == "climb":  # a broad slope, with safe level loiters at both ends
         terrain = ElevationMap.from_function(
-            -180, -400, 20, 59, 40,
+            -180, -400, 10, 118, 80,
             lambda x, y: 120 / (1 + exp(-(x - 450) / 110)),
         )
         world = FlightWorld(terrain, 40, 110)
+    elif name == "slalom":
+        terrain = ElevationMap.from_function(-180, -400, 10, 118, 80, lambda x, y: 0)
+        # Walls meet the map boundary; the vehicle cannot go around their
+        # outer ends or fly over them within the allowed 40..110 m band.
+        world = FlightWorld(terrain, 40, 110, obstacles=(
+            BoxObstacle(210, -400, 0, 250, 60, 260),
+            BoxObstacle(410, -60, 0, 450, 400, 260),
+            BoxObstacle(610, -400, 0, 650, 60, 260),
+        ), obstacle_margin=5)
+    else:  # mountain_pass: slope, two peaks and two obstructing volumes
+        terrain = ElevationMap.from_function(
+            -180, -400, 10, 118, 80,
+            lambda x, y: (100 / (1 + exp(-(x - 530) / 100))
+                          + 150 * exp(-((x - 430) / 100)**2 - ((y - 240) / 110)**2)
+                          + 150 * exp(-((x - 430) / 100)**2 - ((y + 240) / 110)**2)),
+        )
+        world = FlightWorld(terrain, 40, 110, obstacles=(
+            BoxObstacle(240, -400, 0, 310, 60, 300),
+            BoxObstacle(560, -60, 0, 630, 400, 320),
+        ), obstacle_margin=5)
     return Scenario(name, world, world.choose_loiter(0, 0, 40),
                     world.choose_loiter(800, 0, 40))
 
