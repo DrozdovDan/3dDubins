@@ -53,6 +53,27 @@ class _History(ct.Structure):
     _fields_ = [("iteration", ct.c_int), ("cost", ct.c_double)]
 
 
+class _Circle(ct.Structure):
+    _fields_ = [(key, ct.c_double) for key in ("x", "y", "z", "radius")]
+
+
+class _TimedFlight(ct.Structure):
+    _fields_ = [("paths", ct.POINTER(_Path)), ("count", ct.c_int),
+                ("speed", ct.c_double), ("departure", ct.c_double),
+                ("start", _Circle), ("goal", _Circle)]
+
+
+class _Separation(ct.Structure):
+    _fields_ = [("safe", ct.c_int), ("uncertain", ct.c_int),
+                ("time", ct.c_double), ("distance", ct.c_double)]
+
+
+class _Traffic(ct.Structure):
+    _fields_ = [("flights", ct.POINTER(_TimedFlight)), ("count", ct.c_int)] + [
+        (key, ct.c_double) for key in ("speed", "departure", "separation", "horizon")
+    ] + [("start", _Circle), ("goal", _Circle)]
+
+
 _Callback = ct.CFUNCTYPE(ct.c_int, ct.c_int)
 _library = None
 
@@ -183,14 +204,16 @@ def path_is_free(lib, world, path, max_step, min_step):
 
 def plan_rrt(lib, world, start, goal, radius, max_angle, *, iterations, seed,
              circle_samples, start_direction, goal_bias, neighbor_radius,
-             collision_step, time_limit, on_first_solution):
+             collision_step, time_limit, on_first_solution, start_pose=None, traffic=None,
+             relative_gap=0.0):
     from math import nan, pi
     from .core import Pose
-    from .rrt_star import NoPathError, PlanningResult, _validate_inputs
+    from .rrt_star import NoPathError, PlanningResult, _validate_inputs, _validate_relative_gap
     _validate_inputs(world, start, goal, radius, max_angle, iterations, circle_samples,
                      goal_bias, neighbor_radius, collision_step, time_limit)
+    _validate_relative_gap(relative_gap)
     began = perf_counter()
-    roots = start.states(circle_samples, start_direction)
+    roots = [start_pose] if start_pose is not None else start.states(circle_samples, start_direction)
     goals = goal.states(circle_samples, "CW") + goal.states(circle_samples, "CCW")
     rng = Random(seed)
     grid = world.terrain
@@ -225,10 +248,34 @@ def plan_rrt(lib, world, start, goal, radius, max_angle, *, iterations, seed,
             return 1
 
     callback = _Callback(notify) if on_first_solution is not None else _Callback()
-    status = lib.dubins_rrt(ct.byref(data), root_data, len(roots), goal_data, len(goals),
+    arguments = (ct.byref(data), root_data, len(roots), goal_data, len(goals),
                              sample_data, iterations, ct.byref(options), paths, ct.byref(count),
                              history, ct.byref(history_count), ct.byref(completed), ct.byref(nodes),
                              ct.byref(rewires), callback)
+    peer_buffers = []
+    if traffic is None and not relative_gap:
+        status = lib.dubins_rrt(*arguments)
+    else:
+        try:
+            search = lib.dubins_rrt_adaptive if relative_gap else lib.dubins_rrt_traffic
+        except AttributeError as error:
+            raise RuntimeError("native library lacks this search mode; rebuild with python -m dubins_airplane.build_native") from error
+        search.argtypes = [*lib.dubins_rrt.argtypes, ct.POINTER(_Traffic)] + ([ct.c_double] if relative_gap else [])
+        search.restype = ct.c_int
+        peers = []
+        for f in traffic.reservations if traffic else ():
+            path_data = (_Path * len(f.route.paths))(*map(_native_path, f.route.paths))
+            circles = [_Circle(c.x, c.y, c.z, c.radius) for c in (f.request.start, f.request.goal)]
+            peers.append(_TimedFlight(path_data, len(path_data), f.request.speed, f.departure, *circles))
+            peer_buffers.append(path_data)  # Borrowed peer paths live until native search returns.
+        constraints = None
+        if traffic is not None:
+            peer_data = (_TimedFlight * len(peers))(*peers)
+            circles = [_Circle(c.x, c.y, c.z, c.radius) for c in (start, goal)]
+            constraints = _Traffic(peer_data, len(peers), traffic.speed, traffic.departure,
+                                   traffic.separation, traffic.horizon, *circles)
+        extra = (relative_gap,) if relative_gap else ()
+        status = search(*arguments, ct.byref(constraints) if constraints is not None else None, *extra)
     if callback_errors:
         raise callback_errors[0]
     _check(lib, status)
@@ -238,3 +285,26 @@ def plan_rrt(lib, world, start, goal, radius, max_angle, *, iterations, seed,
     return PlanningResult(tuple(_python_path(p) for p in paths[:count.value]), start, goal,
                           completed.value, nodes.value, rewires.value,
                           tuple((h.iteration, h.cost) for h in history[:history_count.value]))
+
+
+def check_flight_pair(lib, a, b, separation, begin, end, step, tolerance):
+    from .fleet import SeparationCheck
+    try:
+        checker = lib.dubins_fleet_check
+    except AttributeError as error:
+        raise RuntimeError("native library predates fleet support; rebuild with python -m dubins_airplane.build_native") from error
+    checker.argtypes = [ct.POINTER(_TimedFlight), ct.POINTER(_TimedFlight),
+                        ct.c_double, ct.c_double, ct.c_double, ct.c_double, ct.c_double,
+                        ct.POINTER(_Separation)]
+    checker.restype = ct.c_int
+    data, buffers = [], []
+    for f in (a, b):
+        paths = (_Path * len(f.route.paths))(*(_native_path(p) for p in f.route.paths))
+        circles = [_Circle(c.x, c.y, c.z, c.radius) for c in (f.request.start, f.request.goal)]
+        data.append(_TimedFlight(paths, len(paths), f.request.speed, f.departure, *circles))
+        buffers.append(paths)  # Borrowed arrays must outlive the native call.
+    out = _Separation()
+    _check(lib, checker(ct.byref(data[0]), ct.byref(data[1]), separation, begin, end,
+                        step, tolerance, ct.byref(out)))
+    return (SeparationCheck(True) if out.safe else
+            SeparationCheck(False, out.time, out.distance, bool(out.uncertain)))

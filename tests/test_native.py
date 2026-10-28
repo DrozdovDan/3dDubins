@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stderr, redirect_stdout
 import ctypes as ct
 import io
+import importlib.util
 import math
 import os
 from random import Random
@@ -63,6 +64,45 @@ class NativeParityTests(unittest.TestCase):
         world = FlightWorld(grid, 20, 110)
         self.assertEqual(self.native_tree_size(world, [Pose(0, 0, 65, 0)],
                                                Pose(200, 0, 65, 0), 50), 2)
+
+    def test_steep_rrt_bounds_preserve_python_paths_in_both_directions(self):
+        grid = ElevationMap.from_function(-200, -400, 20, 60, 40, lambda x, y: 0)
+        with patch.dict(os.environ, DUBINS_BACKEND='cpp'):
+            world = FlightWorld(grid, 20, 1200)
+        for start_z, goal_z in ((70, 1070), (1070, 70)):
+            with self.subTest(start_z=start_z):
+                start = world.choose_loiter(0, 0, 30, altitude=start_z)
+                goal = world.choose_loiter(600, 0, 30, altitude=goal_z)
+                results = []
+                for backend in ('python', 'cpp'):
+                    with patch.dict(os.environ, DUBINS_BACKEND=backend):
+                        results.append(plan_safe_rrt_star(world, start, goal, 30, math.radians(15),
+                                                         iterations=35, seed=7))
+                reference, native = results
+                self.assertEqual(native.iterations, 35)
+                self.assertEqual(reference.nodes, native.nodes)
+                self.assertEqual([i for i, _ in reference.cost_history],
+                                 [i for i, _ in native.cost_history])
+                self.assertAlmostEqual(reference.length, native.length, delta=1e-7)
+                self.assertEqual(len(reference.paths), len(native.paths))
+                for a, b in zip(reference.paths, native.paths):
+                    self.assert_path_equal(a, b)
+                    self.assertTrue(world._path_is_free_python(b))
+
+    def test_deferred_terminals_preserve_python_solution_after_static_rewiring(self):
+        scene = make_scenario('hill_box')
+        results = []
+        for backend in ('python', 'cpp'):
+            with patch.dict(os.environ, DUBINS_BACKEND=backend):
+                results.append(plan_safe_rrt_star(scene.world, scene.start, scene.goal,
+                    scene.radius, scene.max_angle, iterations=100, seed=7))
+        reference, current = results
+        self.assertGreater(current.rewires, 0)
+        self.assertEqual([i for i, _ in reference.cost_history], [i for i, _ in current.cost_history])
+        self.assertAlmostEqual(reference.length, current.length, delta=1e-7)
+        self.assertEqual(len(reference.paths), len(current.paths))
+        for a, b in zip(reference.paths, current.paths):
+            self.assert_path_equal(a, b)
 
     def assert_path_equal(self, a, b):
         self.assertEqual((a.word, a.base_word, a.altitude_case, a.extra_turns),
@@ -264,6 +304,140 @@ class BenchmarkDeadlineTests(unittest.TestCase):
         status, _, calls = self.run_benchmark(0.08, limit="nan")
         self.assertEqual(status, 2)
         self.assertEqual(calls, [])
+
+
+class NativeOptimizationBenchmarkTests(unittest.TestCase):
+    def test_optimization_metric_pairs_normalize_time_but_not_mean_length_twice(self):
+        from examples.plot_native_speed import mission_pairs
+        row = dict(agents=5, baseline=dict(wall_ms=10000, mean_length_m=4000, complete=True, safety_valid=True),
+                   optimized=dict(wall_ms=2000, mean_length_m=4000, complete=True, safety_valid=True))
+        incomplete = dict(row, optimized=dict(wall_ms=3000, mean_length_m=0, complete=False, safety_valid=True))
+        report = dict(runs=[row, incomplete])
+        self.assertEqual(mission_pairs(report, 'wall_ms'), [(2, .4), (2, .6)])
+        self.assertEqual(mission_pairs(report, 'mean_length_m'), [(4, 4), (4, None)])
+
+    @unittest.skipUnless(importlib.util.find_spec('matplotlib'), 'optional Matplotlib')
+    def test_optimization_plot_cli_only_reads_saved_measurements_and_exports_slides(self):
+        import json
+        from pathlib import Path
+        import tempfile
+        from PIL import Image
+        from examples.plot_native_speed import main as plot_main
+
+        libraries = dict(baseline=dict(sha256='old'), optimized=dict(sha256='new'))
+        mission = dict(agents=5, topology='open', baseline=dict(wall_ms=10000, mean_length_m=4000,
+                       complete=True, safety_valid=True), optimized=dict(wall_ms=2000, mean_length_m=4000,
+                       complete=True, safety_valid=True))
+        call = dict(budget=600, baseline_ms=100, optimized_ms=50, succeeded=True, exact_match=True)
+        data = [dict(libraries=libraries, runs=[mission]), dict(libraries=libraries, runs=[call]),
+                dict(libraries=libraries, runs=[dict(call, budget=3000)])]
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            sources = []
+            for name, report in zip(('missions.json', 'local_searches.json', 'local_heavy.json'), data):
+                path = root/name
+                path.write_text(json.dumps(report), encoding='utf-8')
+                sources.append((path, path.read_bytes()))
+            with patch('dubins_airplane.plan_safe_rrt_star') as planner, redirect_stdout(io.StringIO()):
+                self.assertEqual(plot_main([str(root)]), 0)
+                planner.assert_not_called()
+            for name in ('metrics', 'local_time'):
+                with Image.open(root/'figures'/f'{name}.png') as picture:
+                    self.assertEqual(picture.size, (3840, 2160))
+                self.assertTrue((root/'figures'/f'{name}.svg').is_file())
+            self.assertTrue(all(path.read_bytes() == original for path, original in sources))
+            data[2]['libraries'] = dict(baseline=dict(sha256='old'), optimized=dict(sha256='wrong'))
+            (root/'local_heavy.json').write_text(json.dumps(data[2]), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'different library versions'):
+                plot_main([str(root)])
+
+    def test_paired_no_path_comparison_keeps_budget_and_restores_library(self):
+        from types import SimpleNamespace
+        from examples.benchmark_native_speed import compare_search
+        previous, old, new = object(), object(), object()
+        request = SimpleNamespace(start=object(), goal=object(), radius=40, max_angle=.25)
+        libraries = dict(baseline=old, optimized=new)
+        seen = []
+
+        def no_path(*args, **kwargs):
+            seen.append((cpp_native._library, kwargs['iterations']))
+            raise NoPathError('same full-budget failure')
+
+        with patch.object(cpp_native, '_library', previous), \
+                patch('examples.benchmark_native_speed.plan_safe_rrt_star', side_effect=no_path):
+            row, result = compare_search(object(), request, dict(iterations=3000), libraries, reverse=True)
+            self.assertIs(cpp_native._library, previous)
+        self.assertEqual(seen, [(new, 3000), (old, 3000)])
+        self.assertTrue(row['exact_match'])
+        self.assertFalse(row['succeeded'])
+        self.assertEqual(result, 'same full-budget failure')
+
+    def test_native_exception_does_not_leave_wrong_library_active(self):
+        from types import SimpleNamespace
+        from examples.benchmark_native_speed import compare_search
+        previous = object()
+        request = SimpleNamespace(start=object(), goal=object(), radius=40, max_angle=.25)
+        with patch.object(cpp_native, '_library', previous), \
+                patch('examples.benchmark_native_speed.plan_safe_rrt_star', side_effect=RuntimeError('broken')):
+            with self.assertRaisesRegex(RuntimeError, 'broken'):
+                compare_search(object(), request, dict(iterations=600),
+                               dict(baseline=object(), optimized=object()))
+            self.assertIs(cpp_native._library, previous)
+
+
+@unittest.skipUnless(library_path().is_file(), "requires built C++ backend")
+class AdaptiveSearchTests(unittest.TestCase):
+    def fixture(self):
+        with patch.dict(os.environ, DUBINS_BACKEND='cpp'):
+            grid = ElevationMap.from_function(-200, -400, 20, 60, 40, lambda x, y: 0)
+            world = FlightWorld(grid, 20, 1200)
+            start = world.choose_loiter(0, 0, 30, altitude=70)
+            goal = world.choose_loiter(600, 0, 30, altitude=1070)
+        return world, start, goal
+
+    def test_quality_stop_keeps_a_checked_route_and_matches_both_backends(self):
+        from dubins_airplane.rrt_star import _route_lower_bound
+        world, start, goal = self.fixture()
+        routes = []
+        for backend in ('python', 'cpp'):
+            with self.subTest(backend=backend), patch.dict(os.environ, DUBINS_BACKEND=backend):
+                route = plan_safe_rrt_star(world, start, goal, 30, math.radians(15),
+                                          iterations=35, relative_gap=.03)
+                bound = _route_lower_bound(start.states(8, 'CCW'),
+                    goal.states(8, 'CW')+goal.states(8, 'CCW'), 30, math.radians(15))
+                self.assertEqual(route.iterations, 0)
+                self.assertLessEqual(route.length, 1.03*bound)
+                self.assertTrue(all(world._path_is_free_python(p) for p in route.paths))
+                routes.append(route)
+        self.assertAlmostEqual(routes[0].length, routes[1].length, places=7)
+
+    def test_unreached_quality_target_uses_full_cap_and_zero_preserves_results(self):
+        world, start, goal = self.fixture()
+        for backend in ('python', 'cpp'):
+            with self.subTest(backend=backend), patch.dict(os.environ, DUBINS_BACKEND=backend):
+                fixed = plan_safe_rrt_star(world, start, goal, 30, math.radians(15), iterations=12)
+                tight = plan_safe_rrt_star(world, start, goal, 30, math.radians(15),
+                                          iterations=12, relative_gap=1e-12)
+                self.assertEqual(tight, fixed)
+                self.assertEqual(tight.iterations, 12)
+
+    def test_no_path_never_becomes_early_success(self):
+        world, start, goal = self.fixture()
+        world = FlightWorld(world.terrain, 20, 1200, [BoxObstacle(200, -400, 0, 250, 400, 2000)])
+        for backend in ('python', 'cpp'):
+            with self.subTest(backend=backend), patch.dict(os.environ, DUBINS_BACKEND=backend):
+                with self.assertRaisesRegex(NoPathError, 'no route in 5 iterations'):
+                    plan_safe_rrt_star(world, start, goal, 30, math.radians(15),
+                                       iterations=5, relative_gap=.03)
+
+    def test_invalid_quality_targets_are_rejected_before_search(self):
+        world, start, goal = self.fixture()
+        for backend in ('python', 'cpp'):
+            for gap in (-.01, 1.01, float('inf'), float('nan')):
+                with self.subTest(backend=backend, gap=gap), patch.dict(os.environ, DUBINS_BACKEND=backend):
+                    with self.assertRaisesRegex(ValueError, 'relative_gap'):
+                        plan_safe_rrt_star(world, start, goal, 30, math.radians(15),
+                                           iterations=1, relative_gap=gap)
 
 
 if __name__ == "__main__":

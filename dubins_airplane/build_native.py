@@ -33,7 +33,7 @@ def main():
     build = source / "build"
     build.mkdir(exist_ok=True)
     output = build / library_path().name
-    sources = [str(source / name) for name in ("core.cpp", "terrain.cpp", "rrt_star.cpp", "bindings.cpp")]
+    sources = [str(source / name) for name in ("core.cpp", "terrain.cpp", "rrt_star.cpp", "fleet.cpp", "bindings.cpp")]
     name = Path(compiler).stem.lower()
     if name == "cl":
         command = [compiler, "/nologo", "/std:c++17", "/EHsc", "/O2", "/fp:strict", "/LD",

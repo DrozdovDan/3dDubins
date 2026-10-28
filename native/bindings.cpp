@@ -100,4 +100,57 @@ int dubins_rrt(const dubins::World *w, const dubins::Pose *roots, int roots_coun
         *rewires = result.rewires;
     });
 }
+int dubins_fleet_check(const dubins::TimedFlight *a, const dubins::TimedFlight *b,
+                      double separation, double begin, double end, double step,
+                      double tolerance, dubins::Separation *out) {
+    return guarded([&] {
+        if (!a || !b || !out)
+            throw std::invalid_argument("null fleet-check argument");
+        *out = dubins::check_separation(*a, *b, separation, begin, end, step, tolerance);
+    });
+}
+int dubins_rrt_traffic(const dubins::World *w, const dubins::Pose *roots, int roots_count,
+                      const dubins::Pose *goals, int goals_count, const dubins::Pose *samples,
+                      int iterations, const dubins::Options *options, dubins::Path *paths, int *path_count,
+                      dubins::History *history, int *history_count, int *completed, int *nodes,
+                      int *rewires, dubins::FirstSolution callback, const dubins::Traffic *traffic) {
+    return guarded([&] {
+        if (!w || !roots || !goals || !samples || !options || !paths || !path_count || !history ||
+            !history_count || !completed || !nodes || !rewires || !traffic || roots_count != 1 ||
+            goals_count <= 0 || iterations <= 0)
+            throw std::invalid_argument("invalid traffic RRT* buffers");
+        auto result = dubins::rrt_star(*w, {roots, roots + roots_count}, {goals, goals + goals_count},
+                                       {samples, samples + iterations}, *options, callback, traffic);
+        std::copy(result.paths.begin(), result.paths.end(), paths);
+        std::copy(result.history.begin(), result.history.end(), history);
+        *path_count = static_cast<int>(result.paths.size());
+        *history_count = static_cast<int>(result.history.size());
+        *completed = result.iterations;
+        *nodes = result.nodes;
+        *rewires = result.rewires;
+    });
+}
+int dubins_rrt_adaptive(const dubins::World *w, const dubins::Pose *roots, int roots_count,
+                       const dubins::Pose *goals, int goals_count, const dubins::Pose *samples,
+                       int iterations, const dubins::Options *options, dubins::Path *paths, int *path_count,
+                       dubins::History *history, int *history_count, int *completed, int *nodes,
+                       int *rewires, dubins::FirstSolution callback, const dubins::Traffic *traffic,
+                       double relative_gap) {
+    return guarded([&] {
+        if (!w || !roots || !goals || !samples || !options || !paths || !path_count || !history ||
+            !history_count || !completed || !nodes || !rewires || roots_count <= 0 ||
+            goals_count <= 0 || iterations <= 0)
+            throw std::invalid_argument("invalid adaptive RRT* buffers");
+        auto result = dubins::rrt_star(*w, {roots, roots + roots_count}, {goals, goals + goals_count},
+                                     {samples, samples + iterations}, *options, callback, traffic,
+                                     relative_gap);
+        std::copy(result.paths.begin(), result.paths.end(), paths);
+        std::copy(result.history.begin(), result.history.end(), history);
+        *path_count = static_cast<int>(result.paths.size());
+        *history_count = static_cast<int>(result.history.size());
+        *completed = result.iterations;
+        *nodes = result.nodes;
+        *rewires = result.rewires;
+    });
+}
 }

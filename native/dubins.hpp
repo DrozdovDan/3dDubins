@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #if defined(_WIN32) && defined(DUBINS_BUILDING_LIBRARY)
@@ -53,6 +54,43 @@ struct History {
     int iteration;
     double cost;
 };
+struct Circle {
+    double x, y, z, radius;
+};
+// Borrowed paths; an agent waits/arrives on real level circles at its speed.
+struct TimedFlight {
+    const Path *paths;
+    int count;
+    double speed, departure;
+    Circle start, goal;
+};
+struct Separation {
+    int safe = 1, uncertain = 0;
+    double time = 0, distance = 0;
+};
+DUBINS_API Separation check_separation(const TimedFlight &, const TimedFlight &, double separation,
+                                      double begin, double end, double step, double tolerance);
+// An internal tree edge has no loiter endpoint: evaluate its exact geometry,
+// including the final point, against a peer's full timed flight.
+DUBINS_API Separation check_path_separation(const Path &, double speed, double departure,
+                                           const TimedFlight &, double separation,
+                                           double step = 2.0, double tolerance = 0.01);
+struct Traffic {
+    const TimedFlight *flights;
+    int count;
+    double speed, departure, separation, horizon;
+    Circle start, goal;
+};
+// Per-search immutable peer preparation. Continuous certification is unchanged.
+class TrafficChecker {
+    struct Impl;
+    std::unique_ptr<Impl> data;
+public:
+    DUBINS_API explicit TrafficChecker(const Traffic &);
+    DUBINS_API ~TrafficChecker();
+    DUBINS_API bool edge_free(const Path &, double cost) const;
+    DUBINS_API bool terminal_free(const Path &, double cost) const;
+};
 struct Result {
     std::vector<Path> paths;
     std::vector<History> history;
@@ -65,7 +103,8 @@ DUBINS_API Path plan(const Pose &start, const Pose &goal, double radius, double 
 // seeded stream, so comparison does not conflate language and sampling.
 DUBINS_API Result rrt_star(const World &, const std::vector<Pose> &roots,
                            const std::vector<Pose> &goals, const std::vector<Pose> &samples,
-                           const Options &, FirstSolution callback = nullptr);
+                           const Options &, FirstSolution callback = nullptr,
+                           const Traffic *traffic = nullptr, double relative_gap = 0);
 } // namespace dubins
 
 extern "C" {
@@ -85,4 +124,21 @@ DUBINS_API int dubins_rrt(const dubins::World *world, const dubins::Pose *roots,
                           int iterations, const dubins::Options *options, dubins::Path *paths,
                           int *path_count, dubins::History *history, int *history_count,
                           int *completed, int *nodes, int *rewires, dubins::FirstSolution callback);
+// Status 0=OK; inspect out.safe/out.uncertain. Full continuous interval check.
+DUBINS_API int dubins_fleet_check(const dubins::TimedFlight *a, const dubins::TimedFlight *b,
+                                 double separation, double begin, double end, double step,
+                                 double tolerance, dubins::Separation *out);
+// Same output buffers as dubins_rrt. Dynamic mode uses ONE fixed root/departure.
+DUBINS_API int dubins_rrt_traffic(const dubins::World *, const dubins::Pose *, int,
+                                 const dubins::Pose *, int, const dubins::Pose *, int,
+                                 const dubins::Options *, dubins::Path *, int *,
+                                 dubins::History *, int *, int *, int *, int *,
+                                 dubins::FirstSolution, const dubins::Traffic *);
+// Optional quality-based termination; legacy ABI and Options layout stay intact.
+// A null Traffic pointer selects static planning. relative_gap=0 uses the full budget.
+DUBINS_API int dubins_rrt_adaptive(const dubins::World *, const dubins::Pose *, int,
+                                  const dubins::Pose *, int, const dubins::Pose *, int,
+                                  const dubins::Options *, dubins::Path *, int *,
+                                  dubins::History *, int *, int *, int *, int *,
+                                  dubins::FirstSolution, const dubins::Traffic *, double relative_gap);
 }

@@ -15,3 +15,4 @@ dubins_airplane/_native.dylib
 
 # Keep local paper copies, but do not publish them without rights review.
 papers/*.pdf
+visuals/

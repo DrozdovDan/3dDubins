@@ -64,6 +64,17 @@ class GifTimingTests(unittest.TestCase):
         self.assertEqual(times[-1], 55.315)
         self.assertTrue(all(a < b for a, b in zip(times, times[1:])))
 
+    def test_network_focus_slows_playback_without_changing_simulation_clock(self):
+        times = frame_times(75, duration=10, fps=20, focus_until=2)
+        self.assertEqual(len(times), 200)
+        self.assertEqual((times[0], times[-1]), (0, 75))
+        self.assertEqual(times[80], 2)
+        self.assertTrue(all(a < b for a, b in zip(times, times[1:])))
+        self.assertLess(times[1] - times[0], times[-1] - times[-2])
+        for focus in (0, -1, 76, float("nan")):
+            with self.assertRaises(ValueError):
+                frame_times(75, focus_until=focus)
+
     def test_invalid_duration_is_rejected(self):
         for value in (0, -1, float("inf"), float("nan")):
             with self.assertRaises(ValueError):
@@ -72,6 +83,38 @@ class GifTimingTests(unittest.TestCase):
                 frame_times(30, duration=value)
         with self.assertRaises(ValueError):
             frame_times(30, fps=0)
+
+    def test_middle_focus_keeps_order_and_collision_window_visible(self):
+        times = frame_times(360, duration=10, fps=20, focus_window=(155, 190), focus_fraction=.6)
+        self.assertEqual(len(times), 200)
+        self.assertEqual((times[0], times[-1]), (0, 360))
+        self.assertTrue(all(a < b for a, b in zip(times, times[1:])))
+        self.assertGreater(sum(155 <= t <= 190 for t in times), 115)
+        for window in ((-1, 5), (10, 10), (30, 20), (10, 361), (float("nan"), 20)):
+            with self.assertRaises(ValueError):
+                frame_times(360, focus_window=window)
+        with self.assertRaises(ValueError):
+            frame_times(360, focus_window=(155, 190), focus_until=1)
+        for window in ((0, 100), (200, 360), (0, 360)):
+            focused = frame_times(360, focus_window=window)
+            self.assertEqual((focused[0], focused[-1]), (0, 360))
+            self.assertTrue(all(a < b for a, b in zip(focused, focused[1:])))
+
+    def test_multiple_encounters_get_distinct_slow_playback_windows(self):
+        windows = [(70, 90), (180, 205), (260, 275)]
+        times = frame_times(360, duration=15, fps=20, focus_windows=windows, focus_fraction=.6)
+        self.assertEqual(len(times), 300)
+        self.assertEqual((times[0], times[-1]), (0, 360))
+        self.assertTrue(all(a < b for a, b in zip(times, times[1:])))
+        self.assertGreater(sum(any(a <= t <= b for a, b in windows) for t in times), 175)
+        self.assertTrue(all(bound in times for window in windows for bound in window))
+        merged = frame_times(360, focus_windows=[(10, 20), (15, 25)])
+        self.assertTrue(all(a < b for a, b in zip(merged, merged[1:])))
+        for invalid in ([], [(5, 4)], [(-1, 10)], [(10, 361)], [(float("nan"), 20)]):
+            with self.assertRaises(ValueError):
+                frame_times(360, focus_windows=invalid)
+        with self.assertRaises(ValueError):
+            frame_times(360, focus_windows=windows, focus_window=(100, 110))
 
     def test_recording_loader_requires_expected_timeline_range(self):
         from types import SimpleNamespace as NS
@@ -83,6 +126,20 @@ class GifTimingTests(unittest.TestCase):
         client.viewer_state.side_effect = [loading, loaded]
         with patch("rerun_scripts.record_gif.time.sleep"):
             self.assertEqual(wait_for_recording(client, expected_end=55), 55)
+        self.assertEqual(client.viewer_state.call_count, 2)
+
+    def test_fleet_loader_waits_for_last_scene_marker_not_just_trajectory_end(self):
+        from types import SimpleNamespace as NS
+        loading = NS(active_recording="recording", views=[None] * 4,
+            recordings=[NS(store_id="recording", timelines=[NS(name="sim_time", end=360e9)])])
+        complete = NS(active_recording="recording", views=[None] * 4,
+            recordings=[NS(store_id="recording", timelines=[NS(name="sim_time", end=360e9),
+                                                          NS(name="render_complete", end=1)])])
+        client = unittest.mock.Mock()
+        client.viewer_state.side_effect = [loading, complete]
+        with patch("rerun_scripts.record_gif.time.sleep"):
+            self.assertEqual(wait_for_recording(client, expected_end=360,
+                                               completion_timeline="render_complete"), 360)
         self.assertEqual(client.viewer_state.call_count, 2)
 
 

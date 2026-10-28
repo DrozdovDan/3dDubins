@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 project(dubins_native LANGUAGES CXX)
-add_library(dubins_native SHARED core.cpp terrain.cpp rrt_star.cpp bindings.cpp)
+add_library(dubins_native SHARED core.cpp terrain.cpp rrt_star.cpp fleet.cpp bindings.cpp)
 target_compile_features(dubins_native PUBLIC cxx_std_17)
 target_compile_definitions(dubins_native PRIVATE DUBINS_BUILDING_LIBRARY INTERFACE DUBINS_USING_LIBRARY)
 target_include_directories(dubins_native PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

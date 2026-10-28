@@ -28,44 +28,56 @@ struct CSC {
     double total() const { return lengths[0] + lengths[1] + lengths[2]; }
 };
 constexpr const char *words[] = {"RSR", "RSL", "LSR", "LSL"};
-CSC shortest(const Pose &a, const Pose &b, double radius) {
-    double dx = b.x - a.x, dy = b.y - a.y;
-    double distance = std::hypot(dx, dy);
-    if (distance < 1e-12 * radius && std::abs(angle_error(a.yaw, b.yaw)) < 1e-12)
-        return {0, {0, 0, 0}};
-    double theta = std::atan2(dy, dx), d = distance / radius;
-    double alpha = wrap(a.yaw - theta), beta = wrap(b.yaw - theta);
-    double sa = std::sin(alpha), sb = std::sin(beta);
-    double ca = std::cos(alpha), cb = std::cos(beta), cab = std::cos(alpha - beta);
-    CSC best{0, {std::numeric_limits<double>::infinity(), 0, 0}};
-    auto accept = [&](int word, double square, auto angles) {
-        if (square < -1e-12)
-            return;
-        double p = std::sqrt(std::max(0.0, square));
-        auto pair = angles(p);
-        CSC candidate{word, {wrap(pair.first) * radius, p * radius, wrap(pair.second) * radius}};
-        if (candidate.total() < best.total())
-            best = candidate;
-    };
-    // Match the Python/reference tie-breaking order, not formula order.
-    accept(0, 2 + d * d - 2 * cab + 2 * d * (sb - sa), [&](double) {
-        double t = std::atan2(ca - cb, d - sa + sb);
-        return std::pair<double, double>{alpha - t, -beta + t};
-    });
-    accept(1, -2 + d * d + 2 * cab - 2 * d * (sa + sb), [&](double p) {
-        double t = std::atan2(ca + cb, d - sa - sb) - std::atan2(2.0, p);
-        return std::pair<double, double>{alpha - t, beta - t};
-    });
-    accept(2, -2 + d * d + 2 * cab + 2 * d * (sa + sb), [&](double p) {
-        double t = std::atan2(-ca - cb, d + sa + sb) - std::atan2(-2.0, p);
-        return std::pair<double, double>{-alpha + t, -beta + t};
-    });
-    accept(3, 2 + d * d - 2 * cab + 2 * d * (sa - sb), [&](double) {
-        double t = std::atan2(cb - ca, d + sa - sb);
-        return std::pair<double, double>{-alpha + t, beta - t};
-    });
-    return best;
-}
+struct CSCProblem {
+    double distance, alpha, beta, sa, sb, ca, cb, cab, start_yaw, goal_yaw;
+    CSCProblem(const Pose &a, const Pose &b) : start_yaw(a.yaw), goal_yaw(b.yaw) {
+        double dx = b.x - a.x, dy = b.y - a.y;
+        distance = std::hypot(dx, dy);
+        double theta = std::atan2(dy, dx);
+        alpha = wrap(a.yaw - theta);
+        beta = wrap(b.yaw - theta);
+        sa = std::sin(alpha);
+        sb = std::sin(beta);
+        ca = std::cos(alpha);
+        cb = std::cos(beta);
+        cab = std::cos(alpha - beta);
+    }
+    CSC at(double radius) const {
+        if (distance < 1e-12 * radius && std::abs(angle_error(start_yaw, goal_yaw)) < 1e-12)
+            return {0, {0, 0, 0}};
+        double d = distance / radius;
+        CSC best{0, {std::numeric_limits<double>::infinity(), 0, 0}};
+        auto accept = [&](int word, double square, auto angles) {
+            if (square < -1e-12)
+                return;
+            double p = std::sqrt(std::max(0.0, square));
+            auto pair = angles(p);
+            CSC candidate{word,
+                          {wrap(pair.first) * radius, p * radius, wrap(pair.second) * radius}};
+            if (candidate.total() < best.total())
+                best = candidate;
+        };
+        // Match the Python/reference tie-breaking order, not formula order.
+        accept(0, 2 + d * d - 2 * cab + 2 * d * (sb - sa), [&](double) {
+            double t = std::atan2(ca - cb, d - sa + sb);
+            return std::pair<double, double>{alpha - t, -beta + t};
+        });
+        accept(1, -2 + d * d + 2 * cab - 2 * d * (sa + sb), [&](double p) {
+            double t = std::atan2(ca + cb, d - sa - sb) - std::atan2(2.0, p);
+            return std::pair<double, double>{alpha - t, beta - t};
+        });
+        accept(2, -2 + d * d + 2 * cab + 2 * d * (sa + sb), [&](double p) {
+            double t = std::atan2(-ca - cb, d + sa + sb) - std::atan2(-2.0, p);
+            return std::pair<double, double>{-alpha + t, -beta + t};
+        });
+        accept(3, 2 + d * d - 2 * cab + 2 * d * (sa - sb), [&](double) {
+            double t = std::atan2(cb - ca, d + sa - sb);
+            return std::pair<double, double>{-alpha + t, beta - t};
+        });
+        return best;
+    }
+};
+CSC shortest(const Pose &a, const Pose &b, double radius) { return CSCProblem(a, b).at(radius); }
 Pose turn(const Pose &p, char kind, double radius, double angle) {
     double direction = kind == 'L' ? 1 : -1, yaw = p.yaw + direction * angle;
     return {p.x + direction * radius * (std::sin(yaw) - std::sin(p.yaw)),
@@ -161,7 +173,10 @@ Path plan(const Pose &start, const Pose &goal, double radius, double max_angle) 
     path.radius = path.minimum_radius = radius;
     path.max_angle = max_angle;
     double dz = goal.z - start.z, required = std::abs(dz) / std::tan(max_angle);
-    CSC base = shortest(start, goal, radius);
+    // Radius fitting solves the SAME endpoint problem dozens of times.
+    // Its bearings and trig terms do not depend on the trial radius.
+    const CSCProblem problem(start, goal);
+    CSC base = problem.at(radius);
     if (!std::isfinite(base.total()) || !std::isfinite(required))
         throw std::invalid_argument("configuration exceeds the numeric range of the planner");
     path.base_word = base.word;
@@ -204,10 +219,10 @@ Path plan(const Pose &start, const Pose &goal, double radius, double max_angle) 
             throw std::invalid_argument("too many turns");
         path.turns = static_cast<int>(turns);
         auto residual = [&](double r) {
-            return shortest(start, goal, r).total() + tau * path.turns * r - required;
+            return problem.at(r).total() + tau * path.turns * r - required;
         };
         path.radius = root(residual, radius, 2 * radius, 1e-10 * std::max(1.0, required));
-        CSC fitted = shortest(start, goal, path.radius);
+        CSC fitted = problem.at(path.radius);
         word = words[fitted.word];
         lengths = {fitted.lengths[0], fitted.lengths[1], fitted.lengths[2], 0};
         lengths[dz > 0 ? 0 : 2] += tau * path.turns * path.radius;

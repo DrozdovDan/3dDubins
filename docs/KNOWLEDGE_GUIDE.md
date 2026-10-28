@@ -57,7 +57,7 @@ python -m unittest discover -s tests -v
 
 Three further runnable examples isolate common questions: [`example_arrival_heading.py`](../examples/example_arrival_heading.py) compares approach headings, [`example_climb_limit.py`](../examples/example_climb_limit.py) compares the three altitude cases, and [`example_delivery_mission.py`](../examples/example_delivery_mission.py) connects fixed waypoints and exports `outputs/delivery_mission_route.csv`. It does not choose waypoint order or model landing or payload handoff.
 
-For labeled top-down, 3D, and altitude views of every example, plus route animations, see [`VISUAL_GUIDE.md`](VISUAL_GUIDE.md). Every example accepts `--plot` or `--save-visuals`.
+For labeled top-down, 3D, and altitude views of the single-airplane examples, plus route animations, see [`VISUAL_GUIDE.md`](VISUAL_GUIDE.md). Those examples accept `--plot` or `--save-visuals`; fleet examples use the Rerun launcher below.
 
 Smallest API example:
 
@@ -114,6 +114,65 @@ The raster represents constant-height cell patches. A spherical offset takes nea
 This version keeps the exact Owen steering from the previous implementation. The authors instead use a faster suboptimal medium-altitude distance and optimized Dubins-family classification. Here the RRT* tree uses full-state connections, a finite iteration budget and discrete circle phases. Unsupported close-pose CSC equations are rejected. Accordingly, the published general asymptotic properties of RRT* should **not** be claimed as guarantees for this restricted implementation. `NoPathError` means the budget ended without a route; try another seed, more iterations, different circles, or finer cells. `time_limit` is a soft wall-clock limit checked between iterations.
 
 The start and terminal loiters are conservatively validated; a collision-free route ending in a valid periodic circle has a modeled continuation. We do not compute the complete ICS set or certify a real aircraft. There is no ROS, OMPL acceleration, SwissAlti3D/GeoTIFF import, PX4 guidance, polynomial smoothing, wind/dynamic obstacle model, bank/pitch transient model or flight-test reproduction. Use the [authors' ROS/C++ repository](https://github.com/ethz-asl/terrain-navigation) for that system.
+
+### 3.2 Airborne fleet coordination (project extension)
+
+[`fleet.py`](../dubins_airplane/fleet.py) adds **centralized prioritized scheduling**
+on top of the existing Owen/Lim routes. This is our extension, not an algorithm
+claimed to be in either paper. Individual routes keep their full search budget;
+agents follow them at constant per-agent 3D ground speed. In request order, the
+coordinator tries integer complete start-circle laps until continuous pairwise
+distance checks accept a departure. All agents fly from `t=0`, including waiting
+agents, and remain on their goal circles after arrival. Initial circle phases
+are chosen from each planned departure pose, not supplied measured aircraft poses.
+
+Distance checking uses the Lipschitz bound `|d(t)-d(s)| <= (Va+Vb)|t-s|`.
+An interval is accepted only if that bound certifies the strict distance limit;
+ambiguous intervals at the tolerance are rejected. C++ and Python reference
+checkers share this rule. Static route/loiter checks remain unchanged. Whole goal
+disks must be separated, certifying indefinite terminal loitering after all
+agents arrive. Include vehicle size and tracking uncertainty in the input margins.
+
+No joint-space RRT*, conflict-triggered spatial rerouting, priority backtracking,
+shared terminal circle, landing or distributed controller is implemented.
+`NoScheduleError` only rejects these routes/order/delay budget; it does not prove
+infeasibility. There is no fleet optimality or completeness guarantee. Run
+`python -m rerun_scripts.fleet --scenario hills --backend cpp`; see the
+[Russian fleet guide](../rerun_scripts/README.md#многоагентные-сценарии) for all
+scenarios (including hills, the mountain pass and the 1 km altitude case), the shared-clock
+visualization and timing definitions. Terrain fleet examples use the same
+10 m cell model and static collision checks as the single-airplane planner.
+
+### 3.3 Decentralized fleet extension
+
+The fleet examples now additionally default to the project-specific
+[`decentralized.py`](../dubins_airplane/decentralized.py) peer protocol.
+Each agent retains its local planner, frozen physical start-circle phase and
+received reservations. Versioned proposals require all peer votes before an
+immutable commitment; timeouts retain confirmed flights and safe holding circles.
+Initial native searches run concurrently, while a lossy event-driven transport
+simulates messages and timers. This is inspired by asynchronous prioritized
+planning ([Čáp et al., 2013](https://comrob.fel.cvut.cz/papers/iros13dec.pdf)),
+not a reproduction of that paper or an extension of its completeness guarantees
+to Owen steering. Conflicts now invoke [`traffic.py`](../dubins_airplane/traffic.py):
+directed RRT* edges use absolute time derived from fixed departure and accumulated
+3D length / speed. Only received committed trajectories and protected unknown-peer
+holding circles enter the local traffic constraints. Native and Python versions
+check edges, initial holding and terminal motion continuously. Rewiring first
+validates all retimed descendant edges, then recomputes affected goal connections;
+a copied best valid complete route survives later tree changes. The departure
+state/time are fixed, so this changes geometry instead of adding conflict-resolution
+laps. There is no joint-state search, free time/speed sampling, arbitrary priority
+backtracking, online post-commit avoidance or completeness/optimality guarantee. See the
+[Russian protocol guide](../rerun_scripts/README.md#децентрализованное-планирование).
+
+The swarm benchmark and decentralized example launchers additionally use our
+quality-based stopping policy (`--relative-gap 0.03`), not a new result from
+Owen or Lim. A complete checked local route can end the search once its length
+is within 3% of a physical lower bound for the discrete endpoints. Otherwise
+the full cap remains available. This does not bound the joint mission's
+suboptimality. Use `--relative-gap 0` for fixed-budget searches; core Python
+APIs retain that default. See [benchmark settings](BENCHMARK.md).
 
 ## 4. What each paper contributes
 
